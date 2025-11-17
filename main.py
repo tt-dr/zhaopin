@@ -10,19 +10,17 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from tqdm.asyncio import tqdm_asyncio
 
 # ==================== 全局配置常量 ====================
-START_URL = "https://www.zhaopin.com/sou/jl530/kwFT8NTN2RH58MG/p1" #起始的URL
-MAX_PAGES = 1  #可修改，一次性爬去的最大页数
-START_PAGE = 1  #可修改：从第几页开始爬取
-MAX_CONCURRENT = 10 #如果觉得满可以加一点，这个是同时挂载的网页数，如果一次挂十个电脑变得特别卡，就调小一点
+START_URL = "https://www.zhaopin.com/sou/jl538/in100000000/kwFT8NTN2RH58MG/p1"  # 起始的URL
+MAX_PAGES = 1  # 可修改，一次性爬去的最大页数
+START_PAGE = 1  # 可修改：从第几页开始爬取
+MAX_CONCURRENT = 10  # 如果觉得满可以加一点，这个是同时挂载的网页数，如果一次挂十个电脑变得特别卡，就调小一点
 SLEEP_MIN = 0.4
 SLEEP_MAX = 0.8
 
 PROXY = None
-WORD_FILENAME = "新北京岗位信息.docx" #写入的word文件名，这个默认写到同文件夹下面，这个会自动创建的
-JSON_FILENAME = "新北京岗位信息.json" #写入的json文件名，这个后面进行数据清洗的时候会用
+WORD_FILENAME = "上海岗位信息.docx"  # 写入的word文件名，这个默认写到同文件夹下面，这个会自动创建的
+JSON_FILENAME = "上海岗位信息.json"  # 写入的json文件名，这个后面进行数据清洗的时候会用
 
-
-RESUME_FILE = "../resume_state.json"
 JOB_TITLE_SELECTORS = ["h3.summary-plane__title", "h1.job-title", "h3.title", ".job-name"]
 SALARY_SELECTORS = [".summary-plane__salary", ".job-salary", ".salary"]
 COMPANY_NAME_SELECTORS = [".company__title a", ".company-name a", ".job-company__name"]
@@ -57,39 +55,19 @@ class ZhaopinScraper:
         self.max_pages = max_pages
         self.session_data = []
         self.word_initialized = False
-        self.resume_file = RESUME_FILE
-        self.state = self.load_resume_state()
-        self.crawled_pages = set(self.state.get("completed_pages", []))
-        self.seen_links = set(self.state.get("seen_links", []))
+        self.seen_links = set()  # 不再使用断点续写，只在本次运行中去重
 
+        # 如果存在 JSON 文件，加载已有数据用于本次去重
         if os.path.exists(JSON_FILENAME):
             try:
                 with open(JSON_FILENAME, 'r', encoding='utf-8') as f:
                     existing = json.load(f)
-                    self.session_data.extend(existing)
                     for job in existing:
                         link = job.get("详情链接")
                         if link:
                             self.seen_links.add(link)
             except Exception as e:
                 print(f"载入已有 JSON 失败: {e}")
-
-    def load_resume_state(self):
-        if os.path.exists(self.resume_file):
-            try:
-                with open(self.resume_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except:
-                pass
-        return {"completed_pages": [], "seen_links": []}
-
-    def save_resume_state(self):
-        state = {
-            "completed_pages": list(self.crawled_pages),
-            "seen_links": list(self.seen_links)
-        }
-        with open(self.resume_file, 'w', encoding='utf-8') as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
 
     def init_word_doc(self, filename):
         doc = Document()
@@ -309,15 +287,9 @@ class ZhaopinScraper:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
             })
 
-            last_completed = max(self.crawled_pages) if self.crawled_pages else 0
-            effective_start = max(START_PAGE, last_completed + 1)
+            print(f" 配置起始页: {START_PAGE}, 实际从第 {START_PAGE} 页开始")
 
-            print(f" 配置起始页: {START_PAGE}, 已完成最大页: {last_completed}, 实际从第 {effective_start} 页开始")
-
-            for i in range(effective_start, self.max_pages + 1):
-                if i in self.crawled_pages:
-                    continue
-
+            for i in range(START_PAGE, self.max_pages + 1):
                 url = re.sub(r"/p\d+", f"/p{i}", self.start_url)
                 print(f"正在爬取第 {i} 页...")
 
@@ -328,8 +300,6 @@ class ZhaopinScraper:
                     raw_links = await self.get_job_links(page, url)
                     if not raw_links:
                         print(f"第{i}页未找到职位链接")
-                        self.crawled_pages.add(i)
-                        self.save_resume_state()
                         continue
 
                     new_links = [link for link in raw_links if link not in self.seen_links]
@@ -337,8 +307,6 @@ class ZhaopinScraper:
 
                     if not new_links:
                         print(f"第{i}页无新岗位，跳过")
-                        self.crawled_pages.add(i)
-                        self.save_resume_state()
                         continue
 
                     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
@@ -361,9 +329,6 @@ class ZhaopinScraper:
 
                     if page_jobs:
                         self.append_page_to_word(page_jobs, i)
-
-                    self.crawled_pages.add(i)
-                    self.save_resume_state()
 
                 except Exception as e:
                     print(f"爬取第{i}页时出错: {str(e)}")
@@ -388,7 +353,7 @@ class ZhaopinScraper:
 
     def print_summary(self, jobs):
         print(f"\n爬取完成！")
-        print(f"总共获取到 {len(jobs)} 个有效职位（含历史）")
+        print(f"总共获取到 {len(jobs)} 个有效职位")
         if jobs:
             salaries = [job.get('薪资', '') for job in jobs if job.get('薪资')]
             locations = [job.get('工作地点', '') for job in jobs if job.get('工作地点')]
@@ -412,3 +377,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+
